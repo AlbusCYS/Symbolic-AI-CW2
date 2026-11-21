@@ -2,7 +2,9 @@
 COMP3070 Coursework 2
     A1  CNF encoding             + Z3     (SAT clauses loaded into Z3)
     A2  Integer / first-order    + Z3     (one integer variable per step)
+    A3  Propositional logic      + Z3     (Boolean formulas and cardinality constraints)
     A4  CNF encoding             + PySAT  (Boolean x[step, user], Glucose4)
+    A5  CNF encoding             + CP-SAT (shared CNF clauses)
     
 Run:
     python -m pytest tests/test_all_solvers.py -v
@@ -16,13 +18,22 @@ import pytest
 
 from shared.parser import Constraint, WSPInstance, parse_wsp
 from solvers.a2_integer_z3 import solve_integer_z3
+from solvers.a3_boolean_z3 import solve_boolean_z3
 from solvers.a4_cnf_pysat import solve_cnf_pysat
+from solvers.a5_cnf_cpsat import solve_cnf_cpsat
 
+SOLVERS = {
+    "A2": solve_integer_z3,
+    "A3": solve_boolean_z3,
+    "A4": solve_cnf_pysat,
+    "A5": solve_cnf_cpsat,
+}
 try:  # A1 is optional so the file also runs on machines without it
     from solvers.a1_cnf_z3 import solve_cnf_z3
-    SOLVERS = {"A1": solve_cnf_z3, "A2": solve_integer_z3, "A4": solve_cnf_pysat}
 except ImportError:
-    SOLVERS = {"A2": solve_integer_z3, "A4": solve_cnf_pysat}
+    pass
+else:
+    SOLVERS = {"A1": solve_cnf_z3, **SOLVERS}
 
 
 @pytest.fixture(params=list(SOLVERS), autouse=True)

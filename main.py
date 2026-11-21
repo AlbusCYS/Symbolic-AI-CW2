@@ -6,7 +6,9 @@ Main entry point. Choose a solver with --solver (default: a1):
 
     a1  CNF + Z3                  (Boolean clauses solved by Z3)
     a2  Integer / FOL + Z3        (one integer variable per step)
+    a3  Propositional logic + Z3  (Boolean formulas and cardinality constraints)
     a4  CNF + PySAT               (Boolean clauses solved by Glucose4)
+    a5  CNF + CP-SAT              (Boolean clauses solved by OR-Tools)
 
 Examples:
 
@@ -31,7 +33,9 @@ from shared.parser import parse_wsp
 SOLVERS = {
     "a1": ("solvers.a1_cnf_z3", "solve_cnf_z3", "CNF + Z3", "Z3"),
     "a2": ("solvers.a2_integer_z3", "solve_integer_z3", "Integer/FOL + Z3", "Z3"),
+    "a3": ("solvers.a3_boolean_z3", "solve_boolean_z3", "Propositional logic + Z3", "Z3"),
     "a4": ("solvers.a4_cnf_pysat", "solve_cnf_pysat", "CNF + PySAT", "PySAT"),
+    "a5": ("solvers.a5_cnf_cpsat", "solve_cnf_cpsat", "CNF + CP-SAT", "CP-SAT"),
 }
 
 
@@ -41,7 +45,7 @@ def load_solver(key):
     return getattr(importlib.import_module(module_name), function_name)
 
 
-def main():
+def main(default_solver="a1"):
 
     parser = argparse.ArgumentParser(
         description="COMP3070 WSP Solver"
@@ -56,8 +60,9 @@ def main():
     parser.add_argument(
         "--solver",
         choices=sorted(SOLVERS),
-        default="a1",
-        help="Solver to use: a1 = CNF+Z3 (default), a2 = Integer+Z3, a4 = CNF+PySAT"
+        default=default_solver,
+        help=f"Solver to use (default: {default_solver}). "
+             + ", ".join(f"{key} = {info[2]}" for key, info in SOLVERS.items())
     )
 
     parser.add_argument(
@@ -163,8 +168,7 @@ def main():
         f"{result['num_variables']}"
     )
 
-    # A1/A4 report CNF clauses; A2 reports integer constraints.
-    clause_label = "Constraints" if args.solver == "a2" else "CNF clauses"
+    clause_label = "Constraints" if args.solver in ("a2", "a3") else "CNF clauses"
     print(
         f"{clause_label}: {result['num_clauses']}"
     )
