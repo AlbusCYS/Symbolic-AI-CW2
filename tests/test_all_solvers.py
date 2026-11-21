@@ -1,18 +1,34 @@
-
 """
 COMP3070 Coursework 2
-Tests for A1: CNF + Z3 WSP Solver.
-
+    A1  CNF encoding             + Z3     (SAT clauses loaded into Z3)
+    A2  Integer / first-order    + Z3     (one integer variable per step)
+    A4  CNF encoding             + PySAT  (Boolean x[step, user], Glucose4)
+    
 Run:
-    python -m pytest tests/test_solvers.py -v
+    python -m pytest tests/test_all_solvers.py -v
 """
 
+import itertools
+import random
 from pathlib import Path
 
 import pytest
 
-from shared.parser import parse_wsp
-from solvers.a1_cnf_z3 import solve_cnf_z3
+from shared.parser import Constraint, WSPInstance, parse_wsp
+from solvers.a2_integer_z3 import solve_integer_z3
+from solvers.a4_cnf_pysat import solve_cnf_pysat
+
+try:  # A1 is optional so the file also runs on machines without it
+    from solvers.a1_cnf_z3 import solve_cnf_z3
+    SOLVERS = {"A1": solve_cnf_z3, "A2": solve_integer_z3, "A4": solve_cnf_pysat}
+except ImportError:
+    SOLVERS = {"A2": solve_integer_z3, "A4": solve_cnf_pysat}
+
+
+@pytest.fixture(params=list(SOLVERS), autouse=True)
+def solve_cnf_z3_fixture(request, monkeypatch):
+    """Run every test once per solver by swapping the module-level solver."""
+    monkeypatch.setitem(globals(), "solve_cnf_z3", SOLVERS[request.param])
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -435,3 +451,63 @@ One-team s1 s2 (u1 u2) (u3 u4)
         instance,
         result["assignment"]
     )
+
+
+# =========================================
+# 8. Randomised check against brute force
+# =========================================
+
+def brute_force_ok(inst, pi):  # pi: dict step->user. Independent checker straight from the definitions.
+    auth = {}
+    for c in inst.constraints:
+        if c.kind == "authorisations":
+            auth.setdefault(c.data["user"], set()).update(c.data["steps"])
+    if any(u in auth and s not in auth[u] for s, u in pi.items()):
+        return False
+    for c in inst.constraints:
+        d = c.data
+        if c.kind == "separation-of-duty" and pi[d["s1"]] == pi[d["s2"]]: return False
+        if c.kind == "binding-of-duty" and pi[d["s1"]] != pi[d["s2"]]: return False
+        if c.kind == "at-most-k" and len({pi[s] for s in d["steps"]}) > d["k"]: return False
+        if c.kind == "one-team" and not any({pi[s] for s in d["steps"]} <= set(t) for t in d["teams"]): return False
+    return True
+
+
+def random_instance(rng):
+    S, U = rng.randint(1, 5), rng.randint(1, 5)
+    cons = []
+    for u in range(1, U + 1):
+        if rng.random() < .6:
+            cons.append(Constraint("authorisations", {"user": u, "steps": rng.sample(range(1, S + 1), rng.randint(0, S))}))
+    for _ in range(rng.randint(0, 5)):
+        k = rng.choice(["sod", "bod", "amk", "team"])
+        if k in ("sod", "bod") and S >= 2:
+            a, b = rng.sample(range(1, S + 1), 2)
+            cons.append(Constraint("separation-of-duty" if k == "sod" else "binding-of-duty", {"s1": a, "s2": b}))
+        elif k == "amk":
+            T = rng.sample(range(1, S + 1), rng.randint(1, S))
+            cons.append(Constraint("at-most-k", {"k": rng.randint(1, S), "steps": T}))
+        elif k == "team":
+            us = list(range(1, U + 1)); rng.shuffle(us)
+            r = rng.randint(1, U); cuts = sorted(rng.sample(range(1, U), r - 1)) if r > 1 else []
+            teams = [us[a:b] for a, b in zip([0] + cuts, cuts + [rng.randint(len(us), len(us))])]
+            teams = [t for t in teams if t]
+            cons.append(Constraint("one-team", {"steps": rng.sample(range(1, S + 1), rng.randint(1, S)), "teams": teams}))
+    return WSPInstance(S, U, cons)
+
+
+
+def test_random_instances_match_brute_force(request):
+    """300 random small instances: sat/unsat, validity and uniqueness must match
+    exhaustive enumeration of every assignment."""
+    solver = globals()["solve_cnf_z3"]
+    rng = random.Random(0)
+    for _ in range(300):
+        inst = random_instance(rng)
+        sols = [p for p in itertools.product(range(1, inst.num_users + 1), repeat=inst.num_steps)
+                if brute_force_ok(inst, dict(enumerate(p, 1)))]
+        r = solver(inst, True, None)
+        assert r["sat"] == ("sat" if sols else "unsat")
+        if sols:
+            assert brute_force_ok(inst, r["assignment"])
+            assert (r["mul_sol"] == "this is the only solution") == (len(sols) == 1)

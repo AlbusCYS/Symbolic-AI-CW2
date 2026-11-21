@@ -1,15 +1,20 @@
-
 """
 COMP3070 Coursework 2
 Workflow Satisfiability Problem
 
-Main entry point for A1: CNF + Z3.
+Main entry point. Choose a solver with --solver (default: a1):
+
+    a1  CNF + Z3                  (Boolean clauses solved by Z3)
+    a2  Integer / FOL + Z3        (one integer variable per step)
+    a4  CNF + PySAT               (Boolean clauses solved by Glucose4)
 
 Examples:
 
 python main.py instances/example3.txt
 
-python main.py additional-examples/4-constraint-hard/0.txt --skip-uniqueness
+python main.py instances/example3.txt --solver a2
+
+python main.py additional-examples/4-constraint-hard/0.txt --solver a4 --skip-uniqueness
 
 Optional timeout:
 
@@ -17,22 +22,42 @@ python main.py instances/example3.txt --timeout 30000
 """
 
 import argparse
+import importlib
 from pathlib import Path
 
 from shared.parser import parse_wsp
-from solvers.a1_cnf_z3 import solve_cnf_z3
+
+# solver key -> (module, function, description, solving-engine label)
+SOLVERS = {
+    "a1": ("solvers.a1_cnf_z3", "solve_cnf_z3", "CNF + Z3", "Z3"),
+    "a2": ("solvers.a2_integer_z3", "solve_integer_z3", "Integer/FOL + Z3", "Z3"),
+    "a4": ("solvers.a4_cnf_pysat", "solve_cnf_pysat", "CNF + PySAT", "PySAT"),
+}
+
+
+def load_solver(key):
+    """Import only the chosen solver, so unused solver libraries are not required."""
+    module_name, function_name, _, _ = SOLVERS[key]
+    return getattr(importlib.import_module(module_name), function_name)
 
 
 def main():
 
     parser = argparse.ArgumentParser(
-        description="COMP3070 WSP Solver - CNF + Z3"
+        description="COMP3070 WSP Solver"
     )
 
     parser.add_argument(
         "filename",
         type=Path,
         help="Path to WSP instance (.txt)"
+    )
+
+    parser.add_argument(
+        "--solver",
+        choices=sorted(SOLVERS),
+        default="a1",
+        help="Solver to use: a1 = CNF+Z3 (default), a2 = Integer+Z3, a4 = CNF+PySAT"
     )
 
     parser.add_argument(
@@ -46,7 +71,7 @@ def main():
         type=int,
         default=None,
         help=(
-            "Optional timeout per Z3 check, "
+            "Optional timeout per solver check, "
             "in milliseconds. Default: unlimited."
         )
     )
@@ -63,10 +88,15 @@ def main():
             "Timeout must be a positive integer"
         )
 
+    solve = load_solver(args.solver)
+    description = SOLVERS[args.solver][2]
+    engine = SOLVERS[args.solver][3]
+
     instance = parse_wsp(args.filename)
 
     print("\n===== WSP SOLVER =====", flush=True)
 
+    print(f"Solver: {args.solver.upper()} ({description})", flush=True)
     print(f"Instance: {args.filename}", flush=True)
     print(f"Steps: {instance.num_steps}", flush=True)
     print(f"Users: {instance.num_users}", flush=True)
@@ -77,7 +107,7 @@ def main():
 
     print("\nEncoding and solving...", flush=True)
 
-    result = solve_cnf_z3(
+    result = solve(
         instance,
         check_multiple=not args.skip_uniqueness,
         timeout_ms=args.timeout
@@ -133,8 +163,10 @@ def main():
         f"{result['num_variables']}"
     )
 
+    # A1/A4 report CNF clauses; A2 reports integer constraints.
+    clause_label = "Constraints" if args.solver == "a2" else "CNF clauses"
     print(
-        f"CNF clauses: {result['num_clauses']}"
+        f"{clause_label}: {result['num_clauses']}"
     )
 
     print(
@@ -143,12 +175,12 @@ def main():
     )
 
     print(
-        f"Z3 loading time: "
+        f"{engine} loading time: "
         f"{result['loading_time_ms']} ms"
     )
 
     print(
-        f"Z3 solving time: "
+        f"{engine} solving time: "
         f"{result['solve_time_ms']} ms"
     )
 
