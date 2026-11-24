@@ -28,12 +28,8 @@ SOLVERS = {
     "A4": solve_cnf_pysat,
     "A5": solve_cnf_cpsat,
 }
-try:  # A1 is optional so the file also runs on machines without it
-    from solvers.a1_cnf_z3 import solve_cnf_z3
-except ImportError:
-    pass
-else:
-    SOLVERS = {"A1": solve_cnf_z3, **SOLVERS}
+from solvers.a1_cnf_z3 import solve_cnf_z3
+SOLVERS = {"A1": solve_cnf_z3, **SOLVERS}
 
 
 @pytest.fixture(params=list(SOLVERS), autouse=True)
@@ -472,7 +468,7 @@ def brute_force_ok(inst, pi):  # pi: dict step->user. Independent checker straig
     auth = {}
     for c in inst.constraints:
         if c.kind == "authorisations":
-            auth.setdefault(c.data["user"], set()).update(c.data["steps"])
+            auth.setdefault(c.data["user"], set(range(1, inst.num_steps + 1))).intersection_update(c.data["steps"])
     if any(u in auth and s not in auth[u] for s, u in pi.items()):
         return False
     for c in inst.constraints:
@@ -521,4 +517,4 @@ def test_random_instances_match_brute_force(request):
         assert r["sat"] == ("sat" if sols else "unsat")
         if sols:
             assert brute_force_ok(inst, r["assignment"])
-            assert (r["mul_sol"] == "this is the only solution") == (len(sols) == 1)
+            assert r["mul_sol"] == ("this is the only solution" if len(sols) == 1 else "other solutions exist")

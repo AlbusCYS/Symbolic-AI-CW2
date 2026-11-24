@@ -81,7 +81,13 @@ def main(default_solver="a1"):
         )
     )
 
+    parser.add_argument("--encoding", choices=["standard", "equality"], default="standard")
+    parser.add_argument("--backend", default="glucose4", help="PySAT backend (A4 only)")
     args = parser.parse_args()
+    if args.encoding != "standard" and args.solver not in ("a1", "a4", "a5"):
+        parser.error("Alternative CNF encoding requires A1, A4 or A5")
+    if args.backend != "glucose4" and args.solver != "a4":
+        parser.error("--backend is for A4 only")
 
     if not args.filename.is_file():
         parser.error(
@@ -102,6 +108,10 @@ def main(default_solver="a1"):
     print("\n===== WSP SOLVER =====", flush=True)
 
     print(f"Solver: {args.solver.upper()} ({description})", flush=True)
+    if args.solver in ("a1", "a4", "a5"):
+        print(f"CNF encoding: {args.encoding}")
+    if args.solver == "a4":
+        print(f"SAT backend: {args.backend}")
     print(f"Instance: {args.filename}", flush=True)
     print(f"Steps: {instance.num_steps}", flush=True)
     print(f"Users: {instance.num_users}", flush=True)
@@ -112,10 +122,16 @@ def main(default_solver="a1"):
 
     print("\nEncoding and solving...", flush=True)
 
+    options = {}
+    if args.solver in ("a1", "a4", "a5"):
+        options["encoding"] = args.encoding
+    if args.solver == "a4":
+        options["backend"] = args.backend
     result = solve(
         instance,
         check_multiple=not args.skip_uniqueness,
-        timeout_ms=args.timeout
+        timeout_ms=args.timeout,
+        **options
     )
 
     print("\n===== SOLVER RESULT =====")

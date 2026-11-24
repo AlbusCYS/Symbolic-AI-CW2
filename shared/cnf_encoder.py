@@ -4,6 +4,9 @@ CNF clauses are lists of signed, 1-based integer variable IDs.
 All three solver backends MUST consume the same returned clauses.
 """
 from dataclasses import dataclass
+from itertools import combinations
+from math import comb
+from shared.authorisations import allowed_by_user
 from pysat.card import CardEnc, EncType
 from pysat.formula import IDPool
 
@@ -17,7 +20,7 @@ class CNFEncoding:
     num_auxiliary_variables: int
 
 
-def encode_wsp_cnf(instance) -> CNFEncoding:
+def encode_wsp_cnf(instance, encoding="standard") -> CNFEncoding:
     steps = range(1, instance.num_steps + 1)
     users = range(1, instance.num_users + 1)
     pool = IDPool()
@@ -25,10 +28,9 @@ def encode_wsp_cnf(instance) -> CNFEncoding:
 
     # A user with NO Authorisations line is unrestricted.
     # A user whose line lists zero steps is authorised for nothing.
-    authorised = {u: set(steps) for u in users}
-    for c in instance.constraints:
-        if c.kind == 'authorisations':
-            authorised[c.data['user']].intersection_update(c.data['steps'])
+    if encoding not in ("standard", "equality"):
+        raise ValueError(f"Unknown encoding: {encoding}")
+    authorised = allowed_by_user(instance)
 
     assignment_vars: dict[tuple[int, int], int] = {}
     by_step: dict[int, dict[int, int]] = {s: {} for s in steps}
@@ -61,6 +63,24 @@ def encode_wsp_cnf(instance) -> CNFEncoding:
         clauses.append(options)
         at_most(options, 1)
 
+    equality_cache = {}
+    def equal_steps(a, b):
+        # e iff both steps select the same user (exactly-one already enforced).
+        key = tuple(sorted((a, b)))
+        if key in equality_cache:
+            return equality_cache[key]
+        e = pool.id(('equal', *key))
+        equality_cache[key] = e
+        left, right = by_step[a], by_step[b]
+        for u, x in left.items():
+            if u in right:
+                y = right[u]
+                clauses.append([-e, -x, y])
+                clauses.append([-x, -y, e])
+            else:
+                clauses.append([-e, -x])
+        return e
+
     for i, c in enumerate(instance.constraints):
         d = c.data
         if c.kind == 'authorisations':
@@ -80,7 +100,19 @@ def encode_wsp_cnf(instance) -> CNFEncoding:
                     clauses.append([-a[u], b[u]])
                     clauses.append([a[u], -b[u]])
         elif c.kind == 'at-most-k':
-            selected = d['steps']
+            selected = list(d['steps']) if encoding == 'standard' else sorted(set(d['steps']))
+            k = d['k']
+            if encoding == "equality":
+                if k < 0:
+                    clauses.append([])
+                    continue
+                if k >= len(selected):
+                    continue
+                # Avoid combinatorial expansion on large scopes; fall back to standard.
+                if comb(len(selected), k + 1) <= 2000:
+                    for subset in combinations(selected, k + 1):
+                        clauses.append([equal_steps(a, b) for a, b in combinations(subset, 2)])
+                    continue
             relevant = sorted(set().union(*(by_step[s].keys() for s in selected))) if selected else []
             used_vars = []
             for u in relevant:

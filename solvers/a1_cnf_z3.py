@@ -84,7 +84,8 @@ def heartbeat(label="Z3", interval=10):
 def solve_cnf_z3(
     instance,
     check_multiple=True,
-    timeout_ms=None
+    timeout_ms=None,
+    encoding="standard"
 ):
     """
     Solve the WSP instance using CNF + Z3.
@@ -110,7 +111,7 @@ def solve_cnf_z3(
     encode_start = perf_counter()
 
     with heartbeat("CNF encoding"):
-        cnf = encode_wsp_cnf(instance)
+        cnf = encode_wsp_cnf(instance, encoding=encoding)
 
     encoding_ms = (
         perf_counter() - encode_start

@@ -4,16 +4,14 @@ from time import perf_counter
 
 from z3 import And, AtMost, Bool, BoolVal, Not, Or, PbEq, Solver, is_true, sat, unsat
 
+from shared.authorisations import allowed_by_user
 from shared.solver_result import build_result, elapsed_ms
 
 
 def encode_boolean(instance):
     """Build Z3 formulas over x[s, u], which means user u performs step s."""
     steps = range(1, instance.num_steps + 1)
-    authorised = {user: set(steps) for user in range(1, instance.num_users + 1)}
-    for constraint in instance.constraints:
-        if constraint.kind == "authorisations":
-            authorised[constraint.data["user"]].intersection_update(constraint.data["steps"])
+    authorised = allowed_by_user(instance)
 
     # Only authorised pairs have variables. An omitted pair is always false.
     choices = {

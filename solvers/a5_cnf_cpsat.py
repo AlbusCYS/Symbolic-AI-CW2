@@ -8,10 +8,10 @@ from shared.cnf_encoder import encode_wsp_cnf
 from shared.solver_result import build_result, elapsed_ms
 
 
-def solve_cnf_cpsat(instance, check_multiple=True, timeout_ms=None):
+def solve_cnf_cpsat(instance, check_multiple=True, timeout_ms=None, encoding="standard"):
     """Translate each signed CNF clause into one CP-SAT Boolean disjunction."""
     started = perf_counter()
-    cnf = encode_wsp_cnf(instance)
+    cnf = encode_wsp_cnf(instance, encoding=encoding)
     encoded = perf_counter()
 
     model = cp_model.CpModel()
@@ -24,6 +24,7 @@ def solve_cnf_cpsat(instance, check_multiple=True, timeout_ms=None):
 
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 0
     if timeout_ms is not None:
         solver.parameters.max_time_in_seconds = timeout_ms / 1000
     loaded = perf_counter()
@@ -44,6 +45,8 @@ def solve_cnf_cpsat(instance, check_multiple=True, timeout_ms=None):
             raise RuntimeError("Incomplete assignment decoded from CP-SAT model")
     elif status == cp_model.INFEASIBLE:
         result_status = "unsat"
+    elif status == cp_model.MODEL_INVALID:
+        raise RuntimeError("CP-SAT model invalid")
     else:
         result_status = "unknown"
         reason = solver.status_name(status)

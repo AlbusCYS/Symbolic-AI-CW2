@@ -1,21 +1,4 @@
-"""
-COMP3070 Coursework 2
-A4: CNF + PySAT
-
-Boolean variable x[s,u] <=> "user u performs step s". Only pairs allowed by the
-authorisations get a variable, so authorisation constraints cost no clauses.
-
-    Exactly-one   per step      : (OR_u x[s,u]) and pairwise (-x[s,u] OR -x[s,v])
-    Separation    s1 != s2      : for each u:  (-x[s1,u] OR -x[s2,u])
-    Binding       s1 == s2      : for each u:  (x[s1,u] -> x[s2,u]) and converse
-    At-most-k     over T        : aux y[u] with x[s,u] -> y[u]; cardinality
-                                  sum_u y[u] <= k encoded by PySAT CardEnc
-                                  (sequential counter)
-    One-team      T, U_1..U_r   : aux t_i, clause (t_1 OR ... OR t_r),
-                                  t_i -> -x[s,u] for s in T, u not in U_i
-
-The CNF is solved with PySAT (Glucose4). Timeouts use solver.interrupt().
-"""
+"""A4: shared CNF + PySAT, with optional backend selection."""
 import argparse
 import threading
 from contextlib import contextmanager
@@ -23,7 +6,7 @@ from pathlib import Path
 from threading import Timer
 from time import perf_counter
 
-from pysat.card import CardEnc, EncType
+from shared.cnf_encoder import encode_wsp_cnf
 from pysat.solvers import Solver
 
 from shared.parser import parse_wsp
@@ -50,23 +33,6 @@ def heartbeat(label, interval=10):
     finally:
         finished.set()
         worker.join(timeout=1)
-
-
-def allowed_users(instance):
-    """allowed[s] = sorted users who may perform step s (1-based).
-
-    A user with no Authorisations line may do any step; a user with one (or
-    several, which we merge) may only do the listed steps.
-    """
-    listed = {}
-    for c in instance.constraints:
-        if c.kind == "authorisations":
-            listed.setdefault(c.data["user"], set()).update(c.data["steps"])
-    return {
-        s: [u for u in range(1, instance.num_users + 1)
-            if u not in listed or s in listed[u]]
-        for s in range(1, instance.num_steps + 1)
-    }
 
 
 def new_result(encoding_ms, loading_ms, solving_ms, nvars, nprimary, nclauses):
@@ -106,111 +72,26 @@ def print_final(result):
 
 
 
-class CNF:
-    """Clause list + variable allocator. Literals are non-zero ints (DIMACS)."""
-
-    def __init__(self):
-        self.clauses = []
-        self.top = 0
-        self.x = {}  # (step, user) -> variable id
-
-    def new_var(self):
-        self.top += 1
-        return self.top
-
-
-def encode_wsp_cnf_pysat(instance):
-    cnf = CNF()
-    allowed = allowed_users(instance)
-
-    # Primary variables
-    for s in range(1, instance.num_steps + 1):
-        for u in allowed[s]:
-            cnf.x[(s, u)] = cnf.new_var()
-    n_primary = cnf.top
-
-    # Exactly one user per step (authorisations are implicit in `allowed`)
-    for s in range(1, instance.num_steps + 1):
-        lits = [cnf.x[(s, u)] for u in allowed[s]]
-        cnf.clauses.append(lits)  # empty list => immediate UNSAT, as intended
-        for i in range(len(lits)):
-            for j in range(i + 1, len(lits)):
-                cnf.clauses.append([-lits[i], -lits[j]])
-
-    for c in instance.constraints:
-        d = c.data
-        if c.kind == "separation-of-duty":
-            a, b = d["s1"], d["s2"]
-            for u in set(allowed[a]) & set(allowed[b]):
-                cnf.clauses.append([-cnf.x[(a, u)], -cnf.x[(b, u)]])
-
-        elif c.kind == "binding-of-duty":
-            a, b = d["s1"], d["s2"]
-            for u in allowed[a]:
-                if (b, u) in cnf.x:
-                    cnf.clauses.append([-cnf.x[(a, u)], cnf.x[(b, u)]])
-                else:
-                    cnf.clauses.append([-cnf.x[(a, u)]])
-            for u in allowed[b]:
-                if (a, u) not in cnf.x:
-                    cnf.clauses.append([-cnf.x[(b, u)]])
-                else:
-                    cnf.clauses.append([-cnf.x[(b, u)], cnf.x[(a, u)]])
-
-        elif c.kind == "at-most-k":
-            steps = sorted(set(d["steps"]))
-            k = d["k"]
-            if k >= len(steps):
-                continue  # trivially satisfied
-            users = sorted({u for s in steps for u in allowed[s]})
-            y = {}
-            for u in users:
-                y[u] = cnf.new_var()
-                for s in steps:
-                    if (s, u) in cnf.x:
-                        cnf.clauses.append([-cnf.x[(s, u)], y[u]])
-            if k >= len(users):
-                continue
-            card = CardEnc.atmost(lits=list(y.values()), bound=k,
-                                  top_id=cnf.top, encoding=EncType.seqcounter)
-            cnf.clauses.extend(card.clauses)
-            cnf.top = max(cnf.top, card.nv)
-
-        elif c.kind == "one-team":
-            steps = sorted(set(d["steps"]))
-            teams = d["teams"]
-            t_vars = []
-            for team in teams:
-                t = cnf.new_var()
-                t_vars.append(t)
-                members = set(team)
-                for s in steps:
-                    for u in allowed[s]:
-                        if u not in members:
-                            cnf.clauses.append([-t, -cnf.x[(s, u)]])
-            cnf.clauses.append(t_vars)  # some team is chosen
-
-    return cnf, n_primary
-
-
-def solve_cnf_pysat(instance, check_multiple=True, timeout_ms=None):
+def solve_cnf_pysat(instance, check_multiple=True, timeout_ms=None, encoding="standard", backend="glucose4"):
+    if timeout_ms is not None and backend != "glucose4":
+        raise ValueError("Use the external benchmark timeout for alternative PySAT backends")
     total_start = perf_counter()
 
     print("\n[1/4] Encoding WSP into CNF...", flush=True)
     t = perf_counter()
     with heartbeat("CNF encoding"):
-        cnf, n_primary = encode_wsp_cnf_pysat(instance)
+        cnf = encode_wsp_cnf(instance, encoding=encoding)
+        n_primary = cnf.num_primary_variables
     encoding_ms = (perf_counter() - t) * 1000
     print(f"[1/4] Encoding complete: {encoding_ms / 1000:.3f} s", flush=True)
     print(f"      Primary variables: {n_primary:,}", flush=True)
-    print(f"      Auxiliary variables: {cnf.top - n_primary:,}", flush=True)
-    print(f"      Total variables: {cnf.top:,}", flush=True)
+    print(f"      Auxiliary variables: {cnf.num_variables - n_primary:,}", flush=True)
+    print(f"      Total variables: {cnf.num_variables:,}", flush=True)
     print(f"      CNF clauses: {len(cnf.clauses):,}", flush=True)
 
-    print("\n[2/4] Loading CNF into PySAT (Glucose4)...", flush=True)
+    print("\n[2/4] Loading CNF into PySAT...", flush=True)
     t = perf_counter()
-    solver = Solver(name="glucose4", bootstrap_with=cnf.clauses,
-                    use_timer=False, incr=True)
+    solver = Solver(name=backend, bootstrap_with=cnf.clauses)
     loading_ms = (perf_counter() - t) * 1000
     print(f"[2/4] Loading complete: {loading_ms / 1000:.3f} s", flush=True)
 
@@ -224,6 +105,7 @@ def solve_cnf_pysat(instance, check_multiple=True, timeout_ms=None):
             return solver.solve_limited(expect_interrupt=True)
         finally:
             timer.cancel()
+            timer.join()
             solver.clear_interrupt()
 
     print("\n[3/4] PySAT solving started...", flush=True)
@@ -236,7 +118,7 @@ def solve_cnf_pysat(instance, check_multiple=True, timeout_ms=None):
     print(f"[3/4] PySAT finished after {solving_ms / 1000:.3f} s", flush=True)
 
     result = new_result(encoding_ms, loading_ms, solving_ms,
-                        cnf.top, n_primary, len(cnf.clauses))
+                        cnf.num_variables, n_primary, len(cnf.clauses))
 
     if status is False:
         print("[RESULT] UNSAT", flush=True)
@@ -255,7 +137,7 @@ def solve_cnf_pysat(instance, check_multiple=True, timeout_ms=None):
     t = perf_counter()
     model = set(l for l in solver.get_model() if l > 0)
     assignment = {}
-    for (s, u), var in cnf.x.items():
+    for (s, u), var in cnf.assignment_vars.items():
         if var in model:
             if s in assignment:
                 raise RuntimeError(f"Multiple users assigned to step {s}")
@@ -274,7 +156,7 @@ def solve_cnf_pysat(instance, check_multiple=True, timeout_ms=None):
         print("\n[EXTRA] Checking for additional solutions...", flush=True)
         t = perf_counter()
         # Block the WSP assignment (not auxiliary-variable configurations).
-        solver.add_clause([-cnf.x[(s, assignment[s])] for s in assignment])
+        solver.add_clause([-cnf.assignment_vars[(s, assignment[s])] for s in assignment])
         with heartbeat("Uniqueness checking"):
             second = run_solver()
         if second is True:

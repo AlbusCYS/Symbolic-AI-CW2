@@ -24,7 +24,6 @@ from pathlib import Path
 from time import perf_counter
 
 from shared.parser import parse_wsp
-from solvers.a1_cnf_z3 import solve_cnf_z3
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -236,6 +235,7 @@ def check_one(path, timeout_ms=None):
 
         row["expected"] = expected or "unknown"
 
+        from solvers.a1_cnf_z3 import solve_cnf_z3
         result = solve_cnf_z3(
             instance,
             check_multiple=False,

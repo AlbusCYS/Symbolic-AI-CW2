@@ -23,6 +23,7 @@ from time import perf_counter
 from z3 import And, Int, If, Not, Or, Solver, Sum, sat, unsat
 
 from shared.parser import parse_wsp
+from shared.authorisations import allowed_by_step
 
 # ==========================================
 # Helpers (same style as A1)
@@ -49,20 +50,7 @@ def heartbeat(label, interval=10):
 
 
 def allowed_users(instance):
-    """allowed[s] = sorted users who may perform step s (1-based).
-
-    A user with no Authorisations line may do any step; a user with one (or
-    several, which we merge) may only do the listed steps.
-    """
-    listed = {}
-    for c in instance.constraints:
-        if c.kind == "authorisations":
-            listed.setdefault(c.data["user"], set()).update(c.data["steps"])
-    return {
-        s: [u for u in range(1, instance.num_users + 1)
-            if u not in listed or s in listed[u]]
-        for s in range(1, instance.num_steps + 1)
-    }
+    return allowed_by_step(instance)
 
 
 def new_result(encoding_ms, loading_ms, solving_ms, nvars, nprimary, nclauses):
@@ -114,7 +102,8 @@ def encode(instance):
     cons = []
 
     # Domain + authorisations merged: pi_s in A_s (A_s is all users if unrestricted)
-    for s, users in allowed_users(instance).items():
+    domains = allowed_users(instance)
+    for s, users in domains.items():
         if len(users) == n_users:
             cons.append(And(pi[s] >= 1, pi[s] <= n_users))
         else:
@@ -130,9 +119,15 @@ def encode(instance):
             steps = sorted(set(d["steps"]))
             if d["k"] >= len(steps):
                 continue  # trivially true: |{pi(s)}| <= |T| <= k
+            if d["k"] < 0:
+                cons.append(Or())
+                continue
+            relevant = sorted({u for s in steps for u in domains[s]})
+            if d["k"] >= len(relevant):
+                continue
             cons.append(Sum([
-                If(Or([pi[s] == u for s in steps]), 1, 0)
-                for u in range(1, n_users + 1)
+                If(Or([pi[s] == u for s in steps if u in domains[s]]), 1, 0)
+                for u in relevant
             ]) <= d["k"])
         elif c.kind == "one-team":
             cons.append(Or([
